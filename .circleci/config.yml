@@ -1,0 +1,98 @@
+version: 2.1
+jobs:
+  build:
+    docker:
+      - image: microsoft/azure-cli:latest
+    environment:
+      # Define environment variables used in the Azure CLI commands
+      GROUP: Prod
+      LOCATION: eastus
+      VNET_NAME: vm-vnet
+      SUBNET_NAME: subnet
+      AS_NAME: vm-as
+      USERNAME: frakengne
+      PASSWORD: 'ChangeMe123#$'
+    steps:
+      - checkout
+
+      # Install Azure CLI in the CircleCI environment
+      - run:
+          name: Install Azure CLI
+          command: |
+            curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+
+      # Authenticate with Azure using service principal or credentials if you prefer
+      - run:
+          name: Azure Login
+          command: az login
+          env:
+            AZURE_CLI_USER: $AZURE_CLI_USER
+            AZURE_CLI_PASSWORD: $AZURE_CLI_PASSWORD
+            AZURE_TENANT_ID: $AZURE_TENANT_ID
+
+      # Create resource group
+      - run:
+          name: Create Resource Group
+          command: az group create -g $GROUP -l $LOCATION
+
+      # Create virtual network and subnet
+      - run:
+          name: Create Virtual Network and Subnet
+          command: |
+            az network vnet create \
+              -n $VNET_NAME \
+              -g $GROUP \
+              -l $LOCATION \
+              --address-prefixes '192.168.0.0/16' \
+              --subnet-name $SUBNET_NAME \
+              --subnet-prefixes '192.168.1.0/24'
+
+      # Create availability set
+      - run:
+          name: Create Availability Set
+          command: az vm availability-set create -n $AS_NAME -l $LOCATION -g $GROUP
+
+      # Create virtual machines
+      - run:
+          name: Create Virtual Machines
+          command: |
+            for NUM in 1 2 3
+            do
+              az vm create \
+                -n vm-eu-0$NUM \
+                -g $GROUP \
+                -l $LOCATION \
+                --size Standard_B1s \
+                --image Win2019Datacenter \
+                --admin-username $USERNAME \
+                --admin-password $PASSWORD \
+                --vnet-name $VNET_NAME \
+                --subnet $SUBNET_NAME \
+                --public-ip-address "" \
+                --availability-set $AS_NAME \
+                --nsg vm-nsg
+            done
+
+      # Open port 80 for the virtual machines
+      - run:
+          name: Open Port 80
+          command: |
+            for NUM in 1 2 3
+            do
+              az vm open-port -g $GROUP --name vm-eu-0$NUM --port 80
+            done
+
+      # Install IIS and configure default page on the virtual machines
+      - run:
+          name: Install IIS and Configure Default Page
+          command: |
+            for NUM in 1 2 3
+            do
+              az vm extension set \
+                --name CustomScriptExtension \
+                --vm-name vm-eu-0$NUM \
+                -g $GROUP \
+                --publisher Microsoft.Compute \
+                --version 1.8 \
+                --settings '{"commandToExecute":"powershell Add-WindowsFeature Web-Server; powershell Add-Content -Path \"C:\\inetpub\\wwwroot\\Default.htm\" -Value $($env:computername)"}'
+            done
